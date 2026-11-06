@@ -44,7 +44,8 @@ export default async function (req: Request): Promise<Response> {
       state,
       show_dialog: "true",
     }).toString();
-    return Response.redirect(auth.toString(), 302);
+    // Built by hand: Val Town recommends against Response.redirect.
+    return new Response(null, { status: 302, headers: { Location: auth.toString() } });
   }
 
   if (url.pathname === "/callback") {
