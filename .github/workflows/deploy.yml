@@ -2,7 +2,8 @@
 # Based on https://docs.val.town/guides/github-sync/github-actions/, but stateless: instead of a
 # committed .vt/state.json, it clones the val fresh, overlays the repo's files and pushes.
 #
-# Needs the repository secret VAL_TOWN_API_KEY (val.town/settings/api, val read+write).
+# Needs the repository secret VAL_TOWN_API_KEY (val.town/settings/api, scopes: val read+write
+# and user read). Set VAL below to your own val when using a fork.
 # Note: edits made in Val Town's web editor are overwritten by the next deploy, and files that
 # exist only in the val are deleted.
 
@@ -39,7 +40,7 @@ jobs:
           VAL_TOWN_API_KEY: ${{ secrets.VAL_TOWN_API_KEY }}
         run: |
           if [ -z "$VAL_TOWN_API_KEY" ]; then
-            echo "::error::Add a VAL_TOWN_API_KEY repository secret (val.town/settings/api, val read+write)."
+            echo "::error::Add a VAL_TOWN_API_KEY repository secret (val.town/settings/api, val read+write and user read)."
             exit 1
           fi
 

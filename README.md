@@ -4,6 +4,13 @@ Automatically copy the songs from any Spotify playlist into an archive playlist 
 It was made for **Discover Weekly** and **Release Radar**, which replace their songs every week, but it works
 with any playlist.
 
+**It runs on [Val Town](https://www.val.town)**, a free platform for small TypeScript jobs: a daily cron
+job plus a one-page web endpoint, with no server to manage. It isn't a standalone app; to use it, remix
+the val (or fork this repo and deploy it to your own val, see [Deploying from GitHub](#deploying-from-github)).
+
+**Val:** [ilu/spotify-playlist-archiver](https://www.val.town/x/ilu/spotify-playlist-archiver) ·
+**Source:** [github.com/ilu/spotify-playlist-archiver](https://github.com/ilu/spotify-playlist-archiver)
+
 - **Config without code:** each playlist is one environment variable with its link and archive name.
   Options include one playlist per year (`{name} Archive {year}`), a new one every week
   (`{name} {weekyear}-W{week}`), or a single playlist forever.
@@ -167,11 +174,19 @@ If a notification can't be sent, the problem is logged and the other channels st
 
 ## Deploying from GitHub
 
-If you keep the code in a GitHub repo, `.github/workflows/deploy.yml` deploys it to the val on every
-push to `main`. It needs a repository secret `VAL_TOWN_API_KEY` (create the key at
-[val.town/settings/api](https://www.val.town/settings/api) with val read+write access), and the `VAL`
-setting in the workflow pointing at your val. GitHub is then the source of truth: edits made in
-Val Town's web editor are overwritten by the next deploy.
+To keep your copy in GitHub instead of editing it on Val Town, `.github/workflows/deploy.yml` deploys
+the repo to a val on every push to `main`:
+
+1. Remix the val (or create one with the same files and triggers), and fork this repo.
+2. In your fork's `.github/workflows/deploy.yml`, set `VAL` to your val, e.g. `you/spotify-playlist-archiver`.
+3. Create an API token at [val.town/settings/api](https://www.val.town/settings/api) with
+   **val: read and write** and **user: read**, and add it to the fork as the repository secret
+   `VAL_TOWN_API_KEY` (Settings → Secrets and variables → Actions).
+4. Push to `main`, or run the workflow from the **Actions** tab.
+
+GitHub is then the source of truth: edits made in Val Town's web editor are overwritten by the next
+deploy. Environment variables, the Spotify connection and the cron schedule aren't files, so deploys
+never touch them.
 
 ## Troubleshooting
 
