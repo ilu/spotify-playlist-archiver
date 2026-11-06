@@ -1,0 +1,63 @@
+# Deploys this repo to the val on every push to main (GitHub is the source of truth).
+# Based on https://docs.val.town/guides/github-sync/github-actions/, but stateless: instead of a
+# committed .vt/state.json, it clones the val fresh, overlays the repo's files and pushes.
+#
+# Needs the repository secret VAL_TOWN_API_KEY (val.town/settings/api, val read+write).
+# Note: edits made in Val Town's web editor are overwritten by the next deploy, and files that
+# exist only in the val are deleted.
+
+name: Deploy to Val Town
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-to-val-town
+  cancel-in-progress: false
+
+env:
+  VAL: ilu/spotify-playlist-archiver
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install vt CLI
+        run: deno install -gArf jsr:@valtown/vt@0.1.56
+
+      - name: Check the API key secret
+        env:
+          VAL_TOWN_API_KEY: ${{ secrets.VAL_TOWN_API_KEY }}
+        run: |
+          if [ -z "$VAL_TOWN_API_KEY" ]; then
+            echo "::error::Add a VAL_TOWN_API_KEY repository secret (val.town/settings/api, val read+write)."
+            exit 1
+          fi
+
+      - name: Clone the val
+        env:
+          VAL_TOWN_API_KEY: ${{ secrets.VAL_TOWN_API_KEY }}
+        run: vt clone "$VAL" "$RUNNER_TEMP/val" --no-editor-files
+
+      - name: Copy the repo's files over the clone
+        run: |
+          rsync -a --delete \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.vt' \
+            ./ "$RUNNER_TEMP/val/"
+
+      - name: Push to Val Town
+        working-directory: ${{ runner.temp }}/val
+        env:
+          VAL_TOWN_API_KEY: ${{ secrets.VAL_TOWN_API_KEY }}
+        run: vt push
