@@ -4,7 +4,6 @@
 import { NOTIFICATIONS } from "./config.ts";
 import {
   archiveAll,
-  type Cache,
   exchangeCode,
   getAccessToken,
   playlistsFromEnv,
@@ -35,10 +34,6 @@ const tokenStore = (kv: KV): Store => ({
   get: () => kv.get(TOKEN_KEY, "json"),
   set: (v) => kv.put(TOKEN_KEY, JSON.stringify(v)),
 });
-const cache = (kv: KV): Cache => ({
-  get: (key) => kv.get(key, "json"),
-  put: (key, value) => kv.put(key, JSON.stringify(value)),
-});
 const getEnv = (env: Env) => (name: string) => (typeof env[name] === "string" ? (env[name] as string) : undefined);
 
 // ---------- daily job ----------
@@ -48,7 +43,7 @@ async function runArchive(env: Env): Promise<void> {
   let fatal: string | undefined;
   try {
     const token = await getAccessToken(tokenStore(env.STORE), env.SPOTIFY_CLIENT_ID ?? "", env.SPOTIFY_CLIENT_SECRET ?? "");
-    results = await archiveAll(token, playlistsFromEnv(env), { timeZone: env.TIME_ZONE, cache: cache(env.STORE) });
+    results = await archiveAll(token, playlistsFromEnv(env), { timeZone: env.TIME_ZONE });
   } catch (e: any) {
     fatal = e.message;
   }
@@ -122,11 +117,7 @@ async function handleRequest(req: Request, env: Env): Promise<Response> {
     // Run once right away, so you can see it working.
     let report: string;
     try {
-      const results = await archiveAll(tok.access_token, playlistsFromEnv(env), {
-        timeZone: env.TIME_ZONE,
-        cache: cache(env.STORE),
-        counter: { n: 2 }, // the token exchange and /me above
-      });
+      const results = await archiveAll(tok.access_token, playlistsFromEnv(env), { timeZone: env.TIME_ZONE });
       report = results.map(formatResult).join("\n");
     } catch (e: any) {
       report = `✗ ${e.message}`;

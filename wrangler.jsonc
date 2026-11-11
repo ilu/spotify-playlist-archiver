@@ -5,8 +5,7 @@
   "compatibility_date": "2026-11-01",
   // Daily at 09:00 UTC.
   "triggers": { "crons": ["0 9 * * *"] },
-  // Storage for the Spotify login and the list of already-archived songs.
-  // No id needed: Cloudflare creates it on the first deploy.
+  // Storage for the Spotify login. No id needed: Cloudflare creates it on the first deploy.
   "kv_namespaces": [{ "binding": "STORE" }],
   // Keep the PLAYLIST_* and TIME_ZONE variables you set in the dashboard on every deploy.
   "keep_vars": true,

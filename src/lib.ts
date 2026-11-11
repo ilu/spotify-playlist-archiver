@@ -57,8 +57,6 @@ export function playlistsFromEnv(vars: Record<string, unknown>): PlaylistConfig[
 
 /** Where the Spotify login is kept. */
 export type Store = { get(): Promise<any>; set(v: any): Promise<void> };
-/** Small key/value storage for remembering what's already archived. */
-export type Cache = { get(key: string): Promise<any>; put(key: string, value: any): Promise<void> };
 
 const API = "https://api.spotify.com/v1";
 const TOKEN_URL = "https://accounts.spotify.com/api/token";
@@ -114,18 +112,11 @@ export async function getAccessToken(store: Store, clientId: string, clientSecre
   return tok.access_token;
 }
 
-// ---------- request budget ----------
-// Cloudflare's free plan allows 50 outgoing requests per run. The archiver keeps 5 spare for the
-// Spotify login and the notification, and plans the rest so a run never hits the limit.
-export const REQUEST_BUDGET = 45;
-export type Counter = { n: number };
-
 // ---------- reading Spotify-owned playlists via the public embed page ----------
 // The embed page lists at most this many tracks.
 export const EMBED_TRACK_LIMIT = 100;
 
-export async function readEmbedPlaylist(id: string, counter: Counter = { n: 0 }): Promise<{ name: string; uris: string[] }> {
-  counter.n++;
+export async function readEmbedPlaylist(id: string): Promise<{ name: string; uris: string[] }> {
   const res = await fetch(`https://open.spotify.com/embed/playlist/${id}`, {
     headers: {
       "User-Agent":
@@ -153,11 +144,10 @@ export function parsePlaylistId(s: string): string {
 
 // ---------- official Web API (only touches playlists you own) ----------
 
-function makeApi(token: string, counter: Counter) {
+function makeApi(token: string) {
   return async function api(method: string, path: string, body?: unknown): Promise<any> {
     const url = path.startsWith("http") ? path : API + path;
     for (let attempt = 0; attempt < 4; attempt++) {
-      counter.n++;
       const res = await fetch(url, {
         method,
         headers: {
@@ -197,9 +187,9 @@ async function getAll(api: Api, path: string): Promise<any[]> {
 
 const ITEM_FIELDS = "fields=next,items(is_local,item(uri),track(uri))";
 
-/** Track URIs of a playlist you own or collaborate on (100 per request, IDs only). */
-async function getOwnPlaylistUris(api: Api, playlistId: string): Promise<string[]> {
-  const items = await getAll(api, `/playlists/${playlistId}/items?limit=100&${ITEM_FIELDS}`);
+/** Track URIs of a playlist you own or collaborate on (100 per request, IDs only), from `offset` on. */
+async function getOwnPlaylistUris(api: Api, playlistId: string, offset = 0): Promise<string[]> {
+  const items = await getAll(api, `/playlists/${playlistId}/items?limit=100&offset=${offset}&${ITEM_FIELDS}`);
   return items
     .map((it) => (it.item ?? it.track)?.uri)
     .filter((u) => typeof u === "string" && u.startsWith("spotify:track:"));
@@ -227,11 +217,7 @@ async function addTracks(api: Api, playlistId: string, uris: string[]) {
 
 // Playlists you own or collaborate on are read through the official API (no track limit).
 // Anything else (incl. Discover Weekly / Release Radar) falls back to the embed page.
-async function readSource(
-  api: Api,
-  id: string,
-  counter: Counter,
-): Promise<{ name: string; uris: string[]; via: "api" | "embed" }> {
+async function readSource(api: Api, id: string): Promise<{ name: string; uris: string[]; via: "api" | "embed" }> {
   try {
     const meta = await api("GET", `/playlists/${id}?fields=name`);
     const uris = [...new Set(await getOwnPlaylistUris(api, id))];
@@ -239,7 +225,7 @@ async function readSource(
   } catch (e: any) {
     if (![401, 403, 404].includes(e.status)) throw e;
   }
-  return { ...(await readEmbedPlaylist(id, counter)), via: "embed" };
+  return { ...(await readEmbedPlaylist(id)), via: "embed" };
 }
 
 // ---------- archive names ----------
@@ -283,12 +269,16 @@ export type Result = {
   error?: string;
 };
 
-const archiveKey = (id: string) => `archive:${id}`;
+/** How far back in the archive to look for songs that are already there: the newest 100 songs,
+ * or as many as the source playlist has if it's bigger. Repeats older than that get archived again. */
+export function lookbackSize(sourceSize: number): number {
+  return Math.max(100, Math.ceil(sourceSize / 100) * 100);
+}
 
 export async function archiveAll(
   token: string,
   playlists: PlaylistConfig[],
-  opts: { timeZone?: string; now?: Date; cache?: Cache; counter?: Counter } = {},
+  opts: { timeZone?: string; now?: Date } = {},
 ): Promise<Result[]> {
   if (!playlists.length) throw new Error(NO_PLAYLISTS_MESSAGE);
   const timeZone = opts.timeZone || "UTC";
@@ -298,17 +288,14 @@ export async function archiveAll(
   } catch {
     throw new Error(`TIME_ZONE "${timeZone}" isn't a valid time zone. Use a name like "Europe/Helsinki".`);
   }
-  const counter = opts.counter ?? { n: 0 };
-  const api = makeApi(token, counter);
+  const api = makeApi(token);
   const me = await api("GET", "/me");
   const myPlaylists = await getAll(api, "/me/playlists?limit=50");
   const results: Result[] = [];
 
-  for (const [i, cfg] of playlists.entries()) {
+  for (const cfg of playlists) {
     const r: Result = { playlist: cfg.label ?? cfg.playlist };
     results.push(r);
-    // Requests the remaining playlists need at minimum (read source + add songs).
-    const reserveForOthers = 3 * (playlists.length - i - 1);
     try {
       if (cfg.invalid) throw new Error(cfg.invalid);
       const sourceId = parsePlaylistId(cfg.playlist);
@@ -316,7 +303,7 @@ export async function archiveAll(
         throw new Error(`"${cfg.playlist}" doesn't look like a playlist link or ID.`);
       }
 
-      const src = await readSource(api, sourceId, counter);
+      const src = await readSource(api, sourceId);
       r.name = src.name;
       r.inSource = src.uris.length;
       if (src.via === "embed" && src.uris.length >= EMBED_TRACK_LIMIT) {
@@ -332,35 +319,15 @@ export async function archiveAll(
         continue;
       }
 
-      // Which songs are already in the archive? Remembered in the cache; an existing archive is
-      // read once (IDs only, 100 per request), then never again.
-      let existing: Set<string>;
-      if (!target) {
-        existing = new Set();
-      } else {
-        const cached = opts.cache ? await opts.cache.get(archiveKey(target.id)) : null;
-        if (Array.isArray(cached)) {
-          existing = new Set(cached);
-        } else {
-          const pages = Math.ceil((target.items?.total ?? target.tracks?.total ?? 0) / 100);
-          if (pages > REQUEST_BUDGET - 10) {
-            throw new Error(
-              `"${name}" has too many songs to check on Cloudflare's free plan (max about ${(REQUEST_BUDGET - 10) * 100}). ` +
-                "Use a new archive name, e.g. with {year}.",
-            );
-          }
-          if (counter.n + pages + 1 + reserveForOthers > REQUEST_BUDGET) {
-            r.added = 0;
-            r.warning = "checking the existing archive is postponed to the next run (free plan request limit)";
-            continue;
-          }
-          const uris = await getOwnPlaylistUris(api, target.id);
-          existing = new Set(uris);
-          if (opts.cache) await opts.cache.put(archiveKey(target.id), uris);
-        }
+      // Songs already among the newest ones in the archive aren't added again.
+      let recent = new Set<string>();
+      if (target) {
+        const total = target.items?.total ?? target.tracks?.total ?? 0;
+        const offset = Math.max(0, total - lookbackSize(src.uris.length));
+        recent = new Set(await getOwnPlaylistUris(api, target.id, offset));
       }
 
-      const toAdd = src.uris.filter((u) => !existing.has(u));
+      const toAdd = src.uris.filter((u) => !recent.has(u));
       r.created = false;
       if (toAdd.length) {
         if (!target) {
@@ -369,7 +336,8 @@ export async function archiveAll(
           r.created = true;
         }
         await addTracks(api, target.id, toAdd);
-        if (opts.cache) await opts.cache.put(archiveKey(target.id), [...existing, ...toAdd]);
+        // Keep the count current in case another playlist archives into the same playlist.
+        target.items = { ...(target.items ?? {}), total: (target.items?.total ?? target.tracks?.total ?? 0) + toAdd.length };
       }
       r.added = toAdd.length;
     } catch (e: any) {

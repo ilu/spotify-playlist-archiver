@@ -13,7 +13,8 @@ on Val Town, which is shutting down.)
 - **Config without code:** each playlist is one variable with its link and archive name. Options include
   one playlist per year (`{name} Archive {year}`), a new one every week (`{name} {weekyear}-W{week}`),
   or a single playlist forever.
-- **Safe to re-run:** songs already in an archive are never added twice.
+- **Safe to re-run:** songs already among the archive's newest songs aren't added again, so running
+  daily never doubles anything. A song that comes back weeks later is archived again, as part of that week.
 - **Creates archives for you:** new archive playlists (e.g. a new year's) are created automatically.
 - **Notifications:** push notifications to your phone with [ntfy](https://ntfy.sh) when a run fails
   (and optionally when songs are added), or Discord, Slack or any webhook.
@@ -30,17 +31,17 @@ Release Radar, editorial playlists) through its API. They just return "not found
 
 Writing to your archive playlists always goes through the official API, using a Spotify app you create.
 
-The Worker remembers which songs are already in each archive (in Cloudflare KV storage), so an existing
-archive is read only once. That keeps a daily run to about 10 requests, well within the free plan's
-limit of 50 outgoing requests per run.
+To avoid adding the same songs every day, each run looks at the **newest 100 songs** in the archive
+(or as many as the source playlist has, if it's bigger) and skips songs already there. That's one
+request per archive however big it gets, so a run stays at about 10 requests, well within the free
+plan's limit of 50 outgoing requests per run. With 30-song weekly playlists, 100 songs covers about
+three weeks, so a repeat from longer ago is archived again.
 
 Caveats:
 - **The embed page is not an official API.** If Spotify changes it, runs fail with "Couldn't find
   the track list…", you get a notification, and `readEmbedPlaylist` in `src/lib.ts` needs updating.
 - **The 100-song limit.** For long playlists you don't own, only the first 100 songs are visible,
   and the log shows a warning. Discover Weekly and Release Radar have 30 songs each.
-- **Existing archives over ~3,500 songs** can't be checked on the free plan the first time. Use an
-  archive name with `{year}` so each year starts fresh.
 
 ## Setup (about 15 minutes)
 
@@ -131,7 +132,7 @@ Archive name placeholders:
 The dates use the `TIME_ZONE` variable (default UTC).
 
 **Coming from IFTTT or the old Val Town version?** If your archive names match your existing archive
-playlists exactly, it keeps adding to them and skips songs that are already there.
+playlists exactly, it keeps adding to them and skips this week's songs if they're already there.
 
 ## Notifications
 
@@ -188,8 +189,6 @@ Runs and errors show up in the Cloudflare dashboard: your Worker → **Observabi
   rejects the login, the page shows the Connect link. The old login is kept and retried daily, so
   if Spotify's rejection was a fluke, it fixes itself.)
 - **"… doesn't look like a playlist link or ID"**: copy the link again via Share → Copy link.
-- **"checking the existing archive is postponed to the next run"**: normal on a first run with several
-  large existing archives. Each run checks as many as the free plan allows; the rest follow the next day.
 - **A notification didn't arrive**: check the logs for "… notification failed", e.g. `NTFY_TOPIC` isn't set.
 - **"Couldn't find the track list on Spotify's embed page"**: Spotify changed the page, so
   `readEmbedPlaylist` in `src/lib.ts` needs updating. For private playlists you don't own, there's no
