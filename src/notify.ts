@@ -14,7 +14,13 @@ type ChannelBase = {
 };
 
 export type Channel =
-  | (ChannelBase & { type: "ntfy"; topic: Secret; server?: string })
+  | (ChannelBase & {
+    type: "ntfy";
+    topic: Secret;
+    server?: string;
+    /** Optional access token. Without one, ntfy.sh limits messages per IP address, and cloud servers share theirs. */
+    token?: Secret;
+  })
   | (ChannelBase & { type: "discord" | "slack" | "webhook"; url: Secret });
 
 export type NotificationsConfig = { enabled: boolean; channels: Channel[] };
@@ -70,10 +76,12 @@ async function send(ch: Channel, msg: Message, deps: Deps) {
   switch (ch.type) {
     case "ntfy": {
       const server = (ch.server ?? "https://ntfy.sh").replace(/\/$/, "");
+      const token = ch.token ? resolveSecret(ch.token, deps.getEnv) : undefined;
       return post(`${server}/${encodeURIComponent(resolve(ch.topic, deps))}`, msg.text, {
         Title: msg.subject,
         Tags: msg.events.has("error") ? "warning" : "musical_note",
         Priority: msg.events.has("error") ? "high" : "default",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       });
     }
     case "discord":
@@ -91,6 +99,28 @@ async function send(ch: Channel, msg: Message, deps: Deps) {
     default:
       throw new Error(`unknown channel type "${(ch as any).type}"`);
   }
+}
+
+/** Sends a test message to every enabled channel. Returns one line per channel. */
+export async function sendTest(cfg: NotificationsConfig, deps: Deps): Promise<string[]> {
+  if (!cfg.enabled) return ["notifications are switched off in config.ts"];
+  const msg: Message = {
+    events: new Set(),
+    subject: "Spotify archiver: test notification",
+    text: "Connected to Spotify. Notifications work: you'll hear here if a run fails.",
+    results: [],
+  };
+  const lines: string[] = [];
+  for (const ch of cfg.channels) {
+    if (ch.enabled === false) continue;
+    try {
+      await send(ch, msg, deps);
+      lines.push(`✓ ${ch.type}: test notification sent`);
+    } catch (e: any) {
+      lines.push(`✗ ${ch.type}: ${e.message}`);
+    }
+  }
+  return lines.length ? lines : ["no notification channels configured"];
 }
 
 /** Sends the message to every enabled channel that wants one of its events. Never throws; returns failures. */

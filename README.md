@@ -70,6 +70,7 @@ In the Cloudflare dashboard: your Worker → **Settings → Variables and Secret
 | `SPOTIFY_CLIENT_SECRET` | Secret | from your Spotify app |
 | `PLAYLIST_…` | Text or Secret | one per playlist, see [Playlists](#playlists) |
 | `NTFY_TOPIC` | Secret | recommended, see [Notifications](#notifications) |
+| `NTFY_TOKEN` | Secret | recommended with ntfy, see [Notifications](#notifications) |
 | `TIME_ZONE` | Text | optional, e.g. `Europe/Helsinki` (default UTC) |
 
 For example:
@@ -138,12 +139,18 @@ run fails:
 
 1. Install the free [ntfy](https://ntfy.sh) app and subscribe to a hard-to-guess topic name.
 2. Add the same name as the `NTFY_TOPIC` secret on the Worker.
+3. Recommended: create a free account on [ntfy.sh](https://ntfy.sh/app), go to **Account → Access tokens**,
+   create a token and add it as the `NTFY_TOKEN` secret. Without a token, ntfy.sh limits messages per
+   IP address, and Cloudflare's addresses are shared with many other users, so alerts could be dropped.
+
+Connecting Spotify (or reconnecting via `/login`) also sends a test notification and shows on the
+page whether it went through.
 
 ```ts
 export const NOTIFICATIONS: NotificationsConfig = {
   enabled: true,                                                    // master switch
   channels: [
-    { type: "ntfy", topic: env("NTFY_TOPIC"), on: ["error"] },      // add "added" for new-song pings
+    { type: "ntfy", topic: env("NTFY_TOPIC"), token: env("NTFY_TOKEN"), on: ["error"] },  // add "added" for new-song pings
   ],
 };
 ```
@@ -156,7 +163,7 @@ Each channel defaults to `["error"]`. Add `enabled: false` to mute a channel wit
 
 | Type | Setup |
 |---|---|
-| `ntfy` | See above. Optional `server` for self-hosted ntfy. |
+| `ntfy` | See above. Optional `server` for self-hosted ntfy, and `token` for an access token. |
 | `discord` | Channel settings → Integrations → Webhooks → copy URL. Add it as the `DISCORD_WEBHOOK_URL` secret. |
 | `slack` | Create an incoming webhook. Add its URL as the `SLACK_WEBHOOK_URL` secret. |
 | `webhook` | Any URL. Receives a JSON POST: `{ event, subject, text, error, results }`. |

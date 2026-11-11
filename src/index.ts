@@ -11,7 +11,7 @@ import {
   SCOPES,
   type Store,
 } from "./lib.ts";
-import { buildMessage, formatResult, notify } from "./notify.ts";
+import { buildMessage, formatResult, notify, sendTest } from "./notify.ts";
 
 /** The parts of Cloudflare's KV binding we use. */
 type KV = {
@@ -122,8 +122,10 @@ async function handleRequest(req: Request, env: Env): Promise<Response> {
     } catch (e: any) {
       report = `✗ ${e.message}`;
     }
+    const notifyReport = (await sendTest(NOTIFICATIONS, { getEnv: getEnv(env) })).join("\n");
     return page(`<p>✓ Connected as <b>${esc(me.display_name || me.id)}</b>.</p>
       <p>First run:</p><pre style="white-space:pre-wrap">${esc(report)}</pre>
+      <p>Notifications:</p><pre style="white-space:pre-wrap">${esc(notifyReport)}</pre>
       <p>From now on it runs every day by itself. You can close this page.</p>`);
   }
 

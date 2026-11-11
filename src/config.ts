@@ -41,7 +41,9 @@ export const NOTIFICATIONS: NotificationsConfig = {
   channels: [
     // Push notifications to your phone with the free ntfy app (https://ntfy.sh).
     // Subscribe to a hard-to-guess topic name in the app and add the same name as NTFY_TOPIC.
-    { type: "ntfy", topic: env("NTFY_TOPIC"), on: ["error"] },
+    // Recommended: a free ntfy.sh account's access token as NTFY_TOKEN. Without it, ntfy.sh limits
+    // messages per IP address, and Cloudflare's addresses are shared with many other users.
+    { type: "ntfy", topic: env("NTFY_TOPIC"), token: env("NTFY_TOKEN"), on: ["error"] },
 
     // Discord / Slack incoming webhooks.
     // { type: "discord", url: env("DISCORD_WEBHOOK_URL"), on: ["error"] },
