@@ -60,7 +60,8 @@ with `/callback` at the end. Copy it.
 2. Add the Redirect URI from step 1, and tick **Web API**.
 3. Open the app's **Settings** and copy the **Client ID** and **Client secret**.
 
-The app stays in "development mode", which is fine: only your own account uses it.
+The app stays in "development mode", which is fine: only your own account uses it. Note that Spotify
+requires the app's owner to have **Spotify Premium** for development-mode apps to work.
 
 ### 3. Add variables and secrets
 
@@ -209,5 +210,7 @@ Runs and errors show up in the Cloudflare dashboard: your Worker → **Observabi
 - **"Couldn't find the track list on Spotify's embed page"**: either the playlist is private (private
   playlists have no embed page), or Spotify changed the page and `readEmbedPlaylist` in `src/lib.ts`
   needs updating.
+- **Spotify login or API calls fail even though everything is set up**: check that the Spotify account
+  that owns the app has Premium. Spotify requires it for apps in development mode.
 - **INVALID_CLIENT: Invalid redirect URI**: the redirect URI in the Spotify app must be exactly the
   Worker's address followed by `/callback`.
