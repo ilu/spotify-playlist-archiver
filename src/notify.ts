@@ -1,5 +1,4 @@
-// Notifications: email (Val Town built-in), ntfy, Discord, Slack or any webhook.
-// No Val Town imports here; the email sender is passed in, so this is easy to test.
+// Notifications: ntfy (push to your phone), Discord, Slack or any webhook.
 
 import { env, resolveSecret, type Result, type Secret } from "./lib.ts";
 
@@ -15,7 +14,6 @@ type ChannelBase = {
 };
 
 export type Channel =
-  | (ChannelBase & { type: "email" })
   | (ChannelBase & { type: "ntfy"; topic: Secret; server?: string })
   | (ChannelBase & { type: "discord" | "slack" | "webhook"; url: Secret });
 
@@ -30,7 +28,6 @@ export type Message = {
 };
 
 export type Deps = {
-  sendEmail: (m: { subject: string; text: string }) => Promise<unknown>;
   getEnv: (name: string) => string | undefined;
 };
 
@@ -71,8 +68,6 @@ async function post(url: string, body: string, headers: Record<string, string>) 
 async function send(ch: Channel, msg: Message, deps: Deps) {
   const json = { "Content-Type": "application/json" };
   switch (ch.type) {
-    case "email":
-      return void await deps.sendEmail({ subject: msg.subject, text: msg.text });
     case "ntfy": {
       const server = (ch.server ?? "https://ntfy.sh").replace(/\/$/, "");
       return post(`${server}/${encodeURIComponent(resolve(ch.topic, deps))}`, msg.text, {

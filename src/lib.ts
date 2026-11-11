@@ -1,4 +1,4 @@
-// Shared logic for the Spotify archiver. No Val Town imports here, so it's easy to test.
+// Shared logic for the Spotify playlist archiver. Platform-independent: storage is passed in.
 
 export const SCOPES = [
   "playlist-read-private",
@@ -30,22 +30,22 @@ export type PlaylistConfig = {
 
 export const PLAYLIST_ENV_PREFIX = "PLAYLIST_";
 export const NO_PLAYLISTS_MESSAGE =
-  "No playlists configured. Add an environment variable per playlist, e.g. " +
+  "No playlists configured. Add a variable per playlist, e.g. " +
   'PLAYLIST_DISCOVER_WEEKLY = "https://open.spotify.com/playlist/… | Discover Weekly Archive {year}".';
 
 /**
- * Every environment variable named PLAYLIST_<anything> is one playlist:
+ * Every variable named PLAYLIST_<anything> is one playlist:
  *   <link or ID>
  *   <link or ID> | <archive name>
  *   <link or ID> | <archive name> | public
  * Empty values are ignored, so blanking a variable pauses that playlist.
  */
-export function playlistsFromEnv(vars: Record<string, string | undefined>): PlaylistConfig[] {
+export function playlistsFromEnv(vars: Record<string, unknown>): PlaylistConfig[] {
   return Object.keys(vars)
-    .filter((k) => k.startsWith(PLAYLIST_ENV_PREFIX) && vars[k]?.trim())
+    .filter((k) => k.startsWith(PLAYLIST_ENV_PREFIX) && typeof vars[k] === "string" && (vars[k] as string).trim())
     .sort()
     .map((label) => {
-      const [playlist, archive, ...flags] = vars[label]!.split("|").map((s) => s.trim());
+      const [playlist, archive, ...flags] = (vars[label] as string).split("|").map((s) => s.trim());
       const cfg: PlaylistConfig = { label, playlist, archive: archive || undefined };
       for (const flag of flags.filter(Boolean)) {
         if (flag.toLowerCase() === "public") cfg.public = true;
@@ -54,7 +54,11 @@ export function playlistsFromEnv(vars: Record<string, string | undefined>): Play
       return cfg;
     });
 }
+
+/** Where the Spotify login is kept. */
 export type Store = { get(): Promise<any>; set(v: any): Promise<void> };
+/** Small key/value storage for remembering what's already archived. */
+export type Cache = { get(key: string): Promise<any>; put(key: string, value: any): Promise<void> };
 
 const API = "https://api.spotify.com/v1";
 const TOKEN_URL = "https://accounts.spotify.com/api/token";
@@ -86,9 +90,10 @@ export function exchangeCode(code: string, redirectUri: string, clientId: string
 }
 
 export async function getAccessToken(store: Store, clientId: string, clientSecret: string): Promise<string> {
+  if (!clientId || !clientSecret) throw new Error("SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET aren't set.");
   const saved = await store.get();
   if (!saved?.refresh_token) {
-    throw new Error("Not connected to Spotify yet. Open the auth page and click “Connect Spotify”.");
+    throw new Error("Not connected to Spotify yet. Open the Worker's page and click “Connect Spotify”.");
   }
   let tok;
   try {
@@ -96,9 +101,9 @@ export async function getAccessToken(store: Store, clientId: string, clientSecre
   } catch (e: any) {
     if (e.status === 400 && /invalid_grant/.test(e.body ?? "")) {
       // Keep the token (in case this was a fluke and it works next time), but flag it so the
-      // setup page shows "Not connected" with a Connect link.
+      // page shows "Not connected" with a Connect link.
       if (!saved.needsReconnect) await store.set({ ...saved, needsReconnect: true });
-      throw new Error("Spotify login was revoked or expired. Open the auth page and connect again.");
+      throw new Error("Spotify login was revoked or expired. Open the Worker's page and connect again.");
     }
     throw e;
   }
@@ -109,11 +114,18 @@ export async function getAccessToken(store: Store, clientId: string, clientSecre
   return tok.access_token;
 }
 
+// ---------- request budget ----------
+// Cloudflare's free plan allows 50 outgoing requests per run. The archiver keeps 5 spare for the
+// Spotify login and the notification, and plans the rest so a run never hits the limit.
+export const REQUEST_BUDGET = 45;
+export type Counter = { n: number };
+
 // ---------- reading Spotify-owned playlists via the public embed page ----------
 // The embed page lists at most this many tracks.
 export const EMBED_TRACK_LIMIT = 100;
 
-export async function readEmbedPlaylist(id: string): Promise<{ name: string; uris: string[] }> {
+export async function readEmbedPlaylist(id: string, counter: Counter = { n: 0 }): Promise<{ name: string; uris: string[] }> {
+  counter.n++;
   const res = await fetch(`https://open.spotify.com/embed/playlist/${id}`, {
     headers: {
       "User-Agent":
@@ -141,10 +153,11 @@ export function parsePlaylistId(s: string): string {
 
 // ---------- official Web API (only touches playlists you own) ----------
 
-function makeApi(token: string) {
+function makeApi(token: string, counter: Counter) {
   return async function api(method: string, path: string, body?: unknown): Promise<any> {
     const url = path.startsWith("http") ? path : API + path;
-    for (let attempt = 0; attempt < 6; attempt++) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      counter.n++;
       const res = await fetch(url, {
         method,
         headers: {
@@ -171,16 +184,6 @@ function makeApi(token: string) {
 }
 type Api = ReturnType<typeof makeApi>;
 
-// Spotify renamed /tracks → /items in 2026; try the new path, fall back to the old.
-async function withFallback<T>(primary: () => Promise<T>, fallback: () => Promise<T>): Promise<T> {
-  try {
-    return await primary();
-  } catch (e: any) {
-    if ([403, 404, 405].includes(e.status)) return await fallback();
-    throw e;
-  }
-}
-
 async function getAll(api: Api, path: string): Promise<any[]> {
   const out: any[] = [];
   let next: string | null = path;
@@ -192,31 +195,31 @@ async function getAll(api: Api, path: string): Promise<any[]> {
   return out;
 }
 
+const ITEM_FIELDS = "fields=next,items(is_local,item(uri),track(uri))";
+
+/** Track URIs of a playlist you own or collaborate on (100 per request, IDs only). */
 async function getOwnPlaylistUris(api: Api, playlistId: string): Promise<string[]> {
-  const items = await withFallback(
-    () => getAll(api, `/playlists/${playlistId}/items?limit=100`),
-    () => getAll(api, `/playlists/${playlistId}/tracks?limit=100`),
-  );
+  const items = await getAll(api, `/playlists/${playlistId}/items?limit=100&${ITEM_FIELDS}`);
   return items
     .map((it) => (it.item ?? it.track)?.uri)
     .filter((u) => typeof u === "string" && u.startsWith("spotify:track:"));
 }
 
-function createPlaylist(api: Api, me: any, name: string, isPublic: boolean) {
-  const body = { name, public: isPublic, description: "Automatically archived by a Val Town script" };
-  return withFallback(
-    () => api("POST", `/me/playlists`, body),
-    () => api("POST", `/users/${encodeURIComponent(me.id)}/playlists`, body),
-  );
+async function createPlaylist(api: Api, me: any, name: string, isPublic: boolean) {
+  const body = { name, public: isPublic, description: "Archived automatically by spotify-playlist-archiver" };
+  try {
+    return await api("POST", `/me/playlists`, body);
+  } catch (e: any) {
+    if ([403, 404, 405].includes(e.status)) {
+      return await api("POST", `/users/${encodeURIComponent(me.id)}/playlists`, body);
+    }
+    throw e;
+  }
 }
 
 async function addTracks(api: Api, playlistId: string, uris: string[]) {
   for (let i = 0; i < uris.length; i += 100) {
-    const chunk = uris.slice(i, i + 100);
-    await withFallback(
-      () => api("POST", `/playlists/${playlistId}/items`, { uris: chunk }),
-      () => api("POST", `/playlists/${playlistId}/tracks`, { uris: chunk }),
-    );
+    await api("POST", `/playlists/${playlistId}/items`, { uris: uris.slice(i, i + 100) });
   }
 }
 
@@ -224,7 +227,11 @@ async function addTracks(api: Api, playlistId: string, uris: string[]) {
 
 // Playlists you own or collaborate on are read through the official API (no track limit).
 // Anything else (incl. Discover Weekly / Release Radar) falls back to the embed page.
-async function readSource(api: Api, id: string): Promise<{ name: string; uris: string[]; via: "api" | "embed" }> {
+async function readSource(
+  api: Api,
+  id: string,
+  counter: Counter,
+): Promise<{ name: string; uris: string[]; via: "api" | "embed" }> {
   try {
     const meta = await api("GET", `/playlists/${id}?fields=name`);
     const uris = [...new Set(await getOwnPlaylistUris(api, id))];
@@ -232,7 +239,7 @@ async function readSource(api: Api, id: string): Promise<{ name: string; uris: s
   } catch (e: any) {
     if (![401, 403, 404].includes(e.status)) throw e;
   }
-  return { ...(await readEmbedPlaylist(id)), via: "embed" };
+  return { ...(await readEmbedPlaylist(id, counter)), via: "embed" };
 }
 
 // ---------- archive names ----------
@@ -276,10 +283,12 @@ export type Result = {
   error?: string;
 };
 
+const archiveKey = (id: string) => `archive:${id}`;
+
 export async function archiveAll(
   token: string,
   playlists: PlaylistConfig[],
-  opts: { timeZone?: string; now?: Date } = {},
+  opts: { timeZone?: string; now?: Date; cache?: Cache; counter?: Counter } = {},
 ): Promise<Result[]> {
   if (!playlists.length) throw new Error(NO_PLAYLISTS_MESSAGE);
   const timeZone = opts.timeZone || "UTC";
@@ -289,14 +298,17 @@ export async function archiveAll(
   } catch {
     throw new Error(`TIME_ZONE "${timeZone}" isn't a valid time zone. Use a name like "Europe/Helsinki".`);
   }
-  const api = makeApi(token);
+  const counter = opts.counter ?? { n: 0 };
+  const api = makeApi(token, counter);
   const me = await api("GET", "/me");
   const myPlaylists = await getAll(api, "/me/playlists?limit=50");
   const results: Result[] = [];
 
-  for (const cfg of playlists) {
+  for (const [i, cfg] of playlists.entries()) {
     const r: Result = { playlist: cfg.label ?? cfg.playlist };
     results.push(r);
+    // Requests the remaining playlists need at minimum (read source + add songs).
+    const reserveForOthers = 3 * (playlists.length - i - 1);
     try {
       if (cfg.invalid) throw new Error(cfg.invalid);
       const sourceId = parsePlaylistId(cfg.playlist);
@@ -304,7 +316,7 @@ export async function archiveAll(
         throw new Error(`"${cfg.playlist}" doesn't look like a playlist link or ID.`);
       }
 
-      const src = await readSource(api, sourceId);
+      const src = await readSource(api, sourceId, counter);
       r.name = src.name;
       r.inSource = src.uris.length;
       if (src.via === "embed" && src.uris.length >= EMBED_TRACK_LIMIT) {
@@ -320,16 +332,45 @@ export async function archiveAll(
         continue;
       }
 
-      r.created = false;
+      // Which songs are already in the archive? Remembered in the cache; an existing archive is
+      // read once (IDs only, 100 per request), then never again.
+      let existing: Set<string>;
       if (!target) {
-        target = await createPlaylist(api, me, name, cfg.public ?? false);
-        myPlaylists.push(target);
-        r.created = true;
+        existing = new Set();
+      } else {
+        const cached = opts.cache ? await opts.cache.get(archiveKey(target.id)) : null;
+        if (Array.isArray(cached)) {
+          existing = new Set(cached);
+        } else {
+          const pages = Math.ceil((target.items?.total ?? target.tracks?.total ?? 0) / 100);
+          if (pages > REQUEST_BUDGET - 10) {
+            throw new Error(
+              `"${name}" has too many songs to check on Cloudflare's free plan (max about ${(REQUEST_BUDGET - 10) * 100}). ` +
+                "Use a new archive name, e.g. with {year}.",
+            );
+          }
+          if (counter.n + pages + 1 + reserveForOthers > REQUEST_BUDGET) {
+            r.added = 0;
+            r.warning = "checking the existing archive is postponed to the next run (free plan request limit)";
+            continue;
+          }
+          const uris = await getOwnPlaylistUris(api, target.id);
+          existing = new Set(uris);
+          if (opts.cache) await opts.cache.put(archiveKey(target.id), uris);
+        }
       }
 
-      const existing = new Set(r.created ? [] : await getOwnPlaylistUris(api, target.id));
       const toAdd = src.uris.filter((u) => !existing.has(u));
-      await addTracks(api, target.id, toAdd);
+      r.created = false;
+      if (toAdd.length) {
+        if (!target) {
+          target = await createPlaylist(api, me, name, cfg.public ?? false);
+          myPlaylists.push(target);
+          r.created = true;
+        }
+        await addTracks(api, target.id, toAdd);
+        if (opts.cache) await opts.cache.put(archiveKey(target.id), [...existing, ...toAdd]);
+      }
       r.added = toAdd.length;
     } catch (e: any) {
       r.error = e.message;

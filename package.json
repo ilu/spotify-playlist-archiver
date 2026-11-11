@@ -1,0 +1,12 @@
+{
+  "name": "spotify-playlist-archiver",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev --test-scheduled"
+  },
+  "devDependencies": {
+    "wrangler": "^4.135.0"
+  }
+}

@@ -1,7 +1,7 @@
 // Settings for the Spotify playlist archiver.
 //
-// PLAYLISTS are configured as environment variables on the val, one per playlist,
-// so nothing personal lives in the code:
+// PLAYLISTS are configured as variables on the Worker (Cloudflare dashboard → your Worker →
+// Settings → Variables and Secrets), one per playlist, so nothing personal lives in the code:
 //
 //   Name:  PLAYLIST_<anything>, e.g. PLAYLIST_DISCOVER_WEEKLY
 //   Value: <playlist link> | <archive name> | public
@@ -20,8 +20,8 @@
 //
 //   Blank a variable's value to pause that playlist.
 //
-// TIME_ZONE (optional environment variable) sets the time zone for the date placeholders,
-// e.g. "Europe/Helsinki". Default: UTC.
+// TIME_ZONE (optional variable) sets the time zone for the date placeholders,
+// e.g. "Europe/Helsinki". Default: UTC. The daily schedule itself is in wrangler.jsonc (UTC).
 
 import { env, type NotificationsConfig } from "./notify.ts";
 
@@ -33,18 +33,15 @@ import { env, type NotificationsConfig } from "./notify.ts";
 //                        Default: ["error"]
 //               enabled  false turns a channel off without deleting it.
 //
-// Secrets like webhook URLs: use env("NAME") and add NAME as an environment variable on the val,
-// so the secret isn't in the code (and isn't copied when someone remixes the val).
+// Secrets like webhook URLs: use env("NAME") and add NAME as a secret on the Worker,
+// so it isn't in the code.
 
 export const NOTIFICATIONS: NotificationsConfig = {
   enabled: true,
   channels: [
-    // Email to your Val Town account's address. Works out of the box.
-    { type: "email", on: ["error"] },
-
     // Push notifications to your phone with the free ntfy app (https://ntfy.sh).
-    // Subscribe to a hard-to-guess topic name in the app and put the same name in NTFY_TOPIC.
-    // { type: "ntfy", topic: env("NTFY_TOPIC"), on: ["error", "added"] },
+    // Subscribe to a hard-to-guess topic name in the app and add the same name as NTFY_TOPIC.
+    { type: "ntfy", topic: env("NTFY_TOPIC"), on: ["error"] },
 
     // Discord / Slack incoming webhooks.
     // { type: "discord", url: env("DISCORD_WEBHOOK_URL"), on: ["error"] },
