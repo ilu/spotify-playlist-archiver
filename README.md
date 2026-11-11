@@ -84,10 +84,14 @@ PLAYLIST_RELEASE_RADAR   = https://open.spotify.com/playlist/… | Release Radar
 ### 4. Connect
 
 Reload the Worker's page and click **Connect Spotify**, then approve in Spotify. The page then runs
-the archiver once and shows the result:
+the archiver once, sends a test notification, and shows both results:
 ```
+First run:
 ✓ Discover Weekly → "Discover Weekly Archive 2026": added 30 of 30
 ✓ Release Radar → "Release Radar Archive 2026" (new): added 30 of 30
+
+Notifications:
+✓ ntfy: test notification sent
 ```
 
 From then on it runs every day at 09:00 UTC (change `triggers.crons` in `wrangler.jsonc`). Discover
@@ -189,6 +193,9 @@ Local development: `npm install`, then `npm run dev` (with your secrets in a `.d
 
 Runs and errors show up in the Cloudflare dashboard: your Worker → **Observability**.
 
+- **The page keeps asking for the Spotify secrets after you added them**: Cloudflare saved them as a new
+  version without deploying it. Click **Deploy** in the Worker's dashboard.
+
 - **"No playlists configured"**: add at least one `PLAYLIST_…` variable (see [Playlists](#playlists)).
 - **"unknown option …"**: the only option after the archive name is `public`.
 - **"Not connected" / "login was revoked"**: open the Worker's page and click Connect. (When Spotify
@@ -196,8 +203,11 @@ Runs and errors show up in the Cloudflare dashboard: your Worker → **Observabi
   if Spotify's rejection was a fluke, it fixes itself.)
 - **"… doesn't look like a playlist link or ID"**: copy the link again via Share → Copy link.
 - **A notification didn't arrive**: check the logs for "… notification failed", e.g. `NTFY_TOPIC` isn't set.
-- **"Couldn't find the track list on Spotify's embed page"**: Spotify changed the page, so
-  `readEmbedPlaylist` in `src/lib.ts` needs updating. For private playlists you don't own, there's no
-  embed page at all.
+  Reconnecting via `/login` sends a test notification and shows any error on the page.
+- **ntfy: "daily message quota reached"**: add an `NTFY_TOKEN` (see [Notifications](#notifications)), so
+  the quota is your account's instead of Cloudflare's shared IP address.
+- **"Couldn't find the track list on Spotify's embed page"**: either the playlist is private (private
+  playlists have no embed page), or Spotify changed the page and `readEmbedPlaylist` in `src/lib.ts`
+  needs updating.
 - **INVALID_CLIENT: Invalid redirect URI**: the redirect URI in the Spotify app must be exactly the
   Worker's address followed by `/callback`.
