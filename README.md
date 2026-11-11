@@ -47,6 +47,8 @@ Caveats:
 Either click **Deploy to Cloudflare** above (it copies this repo to your GitHub account and deploys it),
 or fork this repo and in the Cloudflare dashboard go to **Workers & Pages → Create application →
 Import a repository** and pick your fork. Either way, every push to `main` redeploys automatically.
+If pushes don't trigger a build, connect GitHub under your Worker → **Settings → Builds** and allow
+access to the repository.
 
 The storage it needs is created automatically. Open the Worker's address (something like
 `https://spotify-playlist-archiver.you.workers.dev`). It shows the **Redirect URI**: the same address
