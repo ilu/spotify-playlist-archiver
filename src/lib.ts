@@ -1,4 +1,8 @@
 // Shared logic for the Spotify playlist archiver. Platform-independent: storage is passed in.
+//
+// Source playlists are read from Spotify's public embed page (the Web API no longer serves
+// Spotify-owned playlists like Discover Weekly to personal apps). Archives are written through
+// the official Web API.
 
 export const SCOPES = [
   "playlist-read-private",
@@ -142,7 +146,7 @@ export function parsePlaylistId(s: string): string {
   return m ? m[1] : String(s).trim();
 }
 
-// ---------- official Web API (only touches playlists you own) ----------
+// ---------- official Web API (only touches your own archive playlists) ----------
 
 function makeApi(token: string) {
   return async function api(method: string, path: string, body?: unknown): Promise<any> {
@@ -187,12 +191,18 @@ async function getAll(api: Api, path: string): Promise<any[]> {
 
 const ITEM_FIELDS = "fields=next,items(is_local,item(uri),track(uri))";
 
-/** Track URIs of a playlist you own or collaborate on (100 per request, IDs only), from `offset` on. */
-async function getOwnPlaylistUris(api: Api, playlistId: string, offset = 0): Promise<string[]> {
-  const items = await getAll(api, `/playlists/${playlistId}/items?limit=100&offset=${offset}&${ITEM_FIELDS}`);
-  return items
-    .map((it) => (it.item ?? it.track)?.uri)
-    .filter((u) => typeof u === "string" && u.startsWith("spotify:track:"));
+/** How many of the archive's newest songs are checked for duplicates: what one request returns. */
+export const LOOKBACK = 100;
+
+/** The newest songs in an archive playlist you own (one request, IDs only). */
+async function newestSongs(api: Api, playlistId: string, total: number): Promise<Set<string>> {
+  const offset = Math.max(0, total - LOOKBACK);
+  const page = await api("GET", `/playlists/${playlistId}/items?limit=${LOOKBACK}&offset=${offset}&${ITEM_FIELDS}`);
+  return new Set(
+    (page?.items ?? [])
+      .map((it: any) => (it.item ?? it.track)?.uri)
+      .filter((u: any) => typeof u === "string" && u.startsWith("spotify:track:")),
+  );
 }
 
 async function createPlaylist(api: Api, me: any, name: string, isPublic: boolean) {
@@ -211,21 +221,6 @@ async function addTracks(api: Api, playlistId: string, uris: string[]) {
   for (let i = 0; i < uris.length; i += 100) {
     await api("POST", `/playlists/${playlistId}/items`, { uris: uris.slice(i, i + 100) });
   }
-}
-
-// ---------- reading any playlist ----------
-
-// Playlists you own or collaborate on are read through the official API (no track limit).
-// Anything else (incl. Discover Weekly / Release Radar) falls back to the embed page.
-async function readSource(api: Api, id: string): Promise<{ name: string; uris: string[]; via: "api" | "embed" }> {
-  try {
-    const meta = await api("GET", `/playlists/${id}?fields=name`);
-    const uris = [...new Set(await getOwnPlaylistUris(api, id))];
-    if (meta?.name && uris.length > 0) return { name: meta.name, uris, via: "api" };
-  } catch (e: any) {
-    if (![401, 403, 404].includes(e.status)) throw e;
-  }
-  return { ...(await readEmbedPlaylist(id)), via: "embed" };
 }
 
 // ---------- archive names ----------
@@ -269,12 +264,6 @@ export type Result = {
   error?: string;
 };
 
-/** How far back in the archive to look for songs that are already there: the newest 100 songs,
- * or as many as the source playlist has if it's bigger. Repeats older than that get archived again. */
-export function lookbackSize(sourceSize: number): number {
-  return Math.max(100, Math.ceil(sourceSize / 100) * 100);
-}
-
 export async function archiveAll(
   token: string,
   playlists: PlaylistConfig[],
@@ -303,11 +292,11 @@ export async function archiveAll(
         throw new Error(`"${cfg.playlist}" doesn't look like a playlist link or ID.`);
       }
 
-      const src = await readSource(api, sourceId);
+      const src = await readEmbedPlaylist(sourceId);
       r.name = src.name;
       r.inSource = src.uris.length;
-      if (src.via === "embed" && src.uris.length >= EMBED_TRACK_LIMIT) {
-        r.warning = `only the first ${EMBED_TRACK_LIMIT} tracks are visible for playlists you don't own`;
+      if (src.uris.length >= EMBED_TRACK_LIMIT) {
+        r.warning = `only the first ${EMBED_TRACK_LIMIT} songs of this playlist are visible`;
       }
 
       const name = archiveName(cfg.archive ?? "{name} Archive {year}", src.name, parts);
@@ -319,13 +308,10 @@ export async function archiveAll(
         continue;
       }
 
-      // Songs already among the newest ones in the archive aren't added again.
-      let recent = new Set<string>();
-      if (target) {
-        const total = target.items?.total ?? target.tracks?.total ?? 0;
-        const offset = Math.max(0, total - lookbackSize(src.uris.length));
-        recent = new Set(await getOwnPlaylistUris(api, target.id, offset));
-      }
+      // Songs already among the archive's newest 100 aren't added again.
+      const recent = target
+        ? await newestSongs(api, target.id, target.items?.total ?? target.tracks?.total ?? 0)
+        : new Set<string>();
 
       const toAdd = src.uris.filter((u) => !recent.has(u));
       r.created = false;

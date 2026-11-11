@@ -1,8 +1,8 @@
 # Spotify playlist archiver
 
-Automatically copy the songs from any Spotify playlist into an archive playlist before they disappear.
-It was made for **Discover Weekly** and **Release Radar**, which replace their songs every week, but it works
-with any playlist.
+Automatically copy the songs from your **Discover Weekly** and **Release Radar** into archive playlists
+before they disappear, since Spotify replaces both every week. Other public Spotify playlists work too,
+up to their first 100 songs.
 
 It runs as a **[Cloudflare Worker](https://developers.cloudflare.com/workers/)** on the free plan: a
 daily scheduled job plus a one-page "Connect Spotify" site, with no server to manage. (It started out
@@ -13,7 +13,7 @@ on Val Town, which is shutting down.)
 - **Config without code:** each playlist is one variable with its link and archive name. Options include
   one playlist per year (`{name} Archive {year}`), a new one every week (`{name} {weekyear}-W{week}`),
   or a single playlist forever.
-- **Safe to re-run:** songs already among the archive's newest songs aren't added again, so running
+- **Safe to re-run:** songs already among the archive's newest 100 aren't added again, so running
   daily never doubles anything. A song that comes back weeks later is archived again, as part of that week.
 - **Creates archives for you:** new archive playlists (e.g. a new year's) are created automatically.
 - **Notifications:** push notifications to your phone with [ntfy](https://ntfy.sh) when a run fails
@@ -22,26 +22,23 @@ on Val Town, which is shutting down.)
 ## How it works
 
 Since November 2024, Spotify doesn't let personal apps read Spotify-owned playlists (Discover Weekly,
-Release Radar, editorial playlists) through its API. They just return "not found". So:
+Release Radar, editorial playlists) through its API. They just return "not found". So the playlists are
+read from Spotify's public **embed player page** (`open.spotify.com/embed/playlist/…`), which shows a
+playlist's first 100 songs without logging in. Writing to your archive playlists goes through the
+official API, using a Spotify app you create.
 
-| Playlist | How the songs are read |
-|---|---|
-| Playlists you own or collaborate on | Official Web API, all songs |
-| Anything else, incl. Discover Weekly & Release Radar | Spotify's public **embed player page** (`open.spotify.com/embed/playlist/…`), first 100 songs |
-
-Writing to your archive playlists always goes through the official API, using a Spotify app you create.
-
-To avoid adding the same songs every day, each run looks at the **newest 100 songs** in the archive
-(or as many as the source playlist has, if it's bigger) and skips songs already there. That's one
-request per archive however big it gets, so a run stays at about 10 requests, well within the free
-plan's limit of 50 outgoing requests per run. With 30-song weekly playlists, 100 songs covers about
-three weeks, so a repeat from longer ago is archived again.
+To avoid adding the same songs every day, each run checks the archive's **newest 100 songs** (what one
+request returns) and skips songs already there. With 30-song weekly playlists that covers about three
+weeks, so a repeat from longer ago is archived again. A run takes about 3 requests per playlist, well
+within the Cloudflare free plan's limit of 50 per run.
 
 Caveats:
 - **The embed page is not an official API.** If Spotify changes it, runs fail with "Couldn't find
   the track list…", you get a notification, and `readEmbedPlaylist` in `src/lib.ts` needs updating.
-- **The 100-song limit.** For long playlists you don't own, only the first 100 songs are visible,
-  and the log shows a warning. Discover Weekly and Release Radar have 30 songs each.
+- **The 100-song limit.** Only a playlist's first 100 songs are visible on the embed page, and the log
+  shows a warning when a playlist hits it. Discover Weekly and Release Radar have 30 songs each.
+- **Public or shared playlists only.** Private playlists have no embed page. Discover Weekly and
+  Release Radar work, since they can be shared by link.
 
 ## Setup (about 15 minutes)
 
